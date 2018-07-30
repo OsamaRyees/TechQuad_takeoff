@@ -33,7 +33,7 @@ class ReplayBuffer:
         return len(self.memory)
     
 class GridObj: 
-    def __init__(self,actor_numLayers,actor_layersUnitNum,actor_dropout_rate,  critic_numLayers,critic_layersUnitNum,critic_dropout_rate,actorStateNNMask,criticStateNNMask,criticActionNNMask):
+    def __init__(self,actor_numLayers,actor_layersUnitNum,actor_dropout_rate,  critic_numLayers,critic_layersUnitNum,critic_dropout_rate,actorStateNNMask,criticStateNNMask,criticActionNNMask,actor_lr,critic_lr):
         self.actor_numLayers = actor_numLayers
         self.actor_layersUnitNum = actor_layersUnitNum
         self.actor_dropout_rate = actor_dropout_rate
@@ -45,12 +45,14 @@ class GridObj:
         self.criticActionNNMask = criticActionNNMask
         self.criticStateNNMask = criticStateNNMask
         self.actorStateNNMask = actorStateNNMask
+        self.critic_lr = critic_lr
+        self.actor_lr = actor_lr
 
 
 class Actor:
     """Actor (Policy) Model."""
 
-    def __init__(self, state_size, action_size, action_low, action_high):
+    def __init__(self, state_size, action_size, action_low, action_high,gridObj):
         """Initialize parameters and build model.
 
         Params
@@ -65,8 +67,7 @@ class Actor:
         self.action_low = action_low
         self.action_high = action_high
         self.action_range = self.action_high - self.action_low
-        self.rewardList = []
-        self.positionList = []
+        self.gridObj = gridObj
         # Initialize any other variables here
 
         self.build_model()
@@ -77,25 +78,29 @@ class Actor:
         states = layers.Input(shape=(self.state_size,), name='states')
 
         
-        # Add hidden layers
-        net = layers.Dense(units=64,kernel_regularizer=layers.regularizers.l2(1e-6))(states)
-        #net = layers.BatchNormalization()(net)
-        #net = layers.Dropout(0.1)(net)
 
-        net = layers.Dense(units=64,kernel_regularizer=layers.regularizers.l2(1e-6))(net)
-        net = layers.Dropout(0.2)(net)
-        net = layers.BatchNormalization()(net)
-        net = layers.LeakyReLU(1e-2)(net)
+        #add first layer manually
+        net = layers.Dense(units=self.gridObj.actor_layersUnitNum[0],kernel_regularizer=layers.regularizers.l2(1e-6))(states)
+        #print("\n1st net \n")
+        for n in range(self.gridObj.actor_numLayers):
+            if n>0:  #skip first one
+            # Try different layer sizes, activations, add batch normalization, regularizers, etc.
+                    
+                net = layers.Dense(units= self.gridObj.actor_layersUnitNum[n])(net)
+                #print("dropout_rand[n]=",self.gridObj.actor_dropout_rand[n])
 
-        net = layers.Dense(units=64,kernel_regularizer=layers.regularizers.l2(1e-6))(net)
-        net = layers.Dropout(0.3)(net)
-        net = layers.BatchNormalization()(net)
-        net = layers.LeakyReLU(1e-2)(net)
+                #net = layers.Dropout(net, rate = dropout_rand[n])
+                net = layers.Dropout(rate = self.gridObj.actor_dropout_rate[n])(net)
+                net = layers.BatchNormalization()(net)
+                #net = layers.Activation("relu")(net)
+                net = layers.LeakyReLU(1e-2)(net)
+                #print("\n net \n")
+        
 
-
+  
         # Add final output layer with sigmoid activation
         raw_actions = layers.Dense(units=self.action_size, kernel_initializer=initializers.RandomUniform(minval=-0.0001, maxval=0.0001, seed=None), activation='sigmoid', name='raw_actions')(net)
-
+        #print("\n last net \n")
         # Scale [0, 1] output for each action dimension to proper range
         actions = layers.Lambda(lambda x: (x * self.action_range) + self.action_low, name='actions')(raw_actions)
 
@@ -112,7 +117,7 @@ class Actor:
         # Incorporate any additional losses here (e.g. from regularizers)
 
         # Define optimizer and training function
-        optimizer = optimizers.Adam(lr=0.001)
+        optimizer = optimizers.Adam(lr=self.gridObj.actor_lr)
         updates_op = optimizer.get_updates(params=self.model.trainable_weights, loss=loss)
         self.train_fn = K.function(
             inputs=[self.model.input, action_gradients, K.learning_phase()],
@@ -124,7 +129,7 @@ class Actor:
 class Critic:
     """Critic (Value) Model."""
 
-    def __init__(self, state_size, action_size):
+    def __init__(self, state_size, action_size,gridObj):
         """Initialize parameters and build model.
         Params
         ======
@@ -135,10 +140,12 @@ class Critic:
         self.action_size = action_size
 
         # Initialize any other variables here
+        self.gridObj = gridObj
         self.build_model()
 
     def build_model(self):
         """Build a critic (value) network that maps (state, action) pairs -> Q-values."""
+
 
 
         # Define input layers
@@ -146,40 +153,42 @@ class Critic:
         actions = layers.Input(shape=(self.action_size,), name='actions')
 
         # Add hidden layer(s) for state pathway
-        net_states = layers.Dense(units=96,kernel_regularizer=layers.regularizers.l2(1e-6))(states)
-
-        net_states = layers.Dense(units=96)(states)
-        net_states = layers.LeakyReLU(1e-2)(net_states)
-        net_states = layers.BatchNormalization()(net_states)
-        net_states = layers.Dropout(rate = 0.1)(net_states)
-
-        net_states = layers.Dense(units=96)(states)
-        net_states = layers.LeakyReLU(1e-2)(net_states)
-        net_states = layers.BatchNormalization()(net_states)
-        net_states = layers.Dropout(rate = 0.1)(net_states)
+        net_states = layers.Dense(units=self.gridObj.critic_layersUnitNum[0],kernel_regularizer=layers.regularizers.l2(1e-6))(states)
+        #print("\n1st net_states ")
+        for n in range(self.gridObj.critic_numLayers):
+            if n>0:  #skip first one
+                if self.gridObj.criticActionNNMask[n]:
+                    #rand_units = np.random.choice(self.gridObj.critic_layersUnitNum)
+                    net_states = layers.Dense(units= self.gridObj.critic_layersUnitNum[n])(net_states)
+                    net_states = layers.LeakyReLU(1e-2)(net_states)
+                    #print("dropout_rand[n]=",self.gridObj.critic_dropout_rand[n])
+                    net_states = layers.BatchNormalization()(net_states)
+                    #net_states = layers.Dropout(net, rate = dropout_rand[n])
+                    net_states = layers.Dropout(rate = self.gridObj.critic_dropout_rate[n])(net_states)
+                    #print("\nnet_states ")
+                    #net_states = layers.Activation("relu")(net_states)
+ 
 
         #add last layer with same size as action
-        net_states = layers.Dense(units=96,kernel_regularizer=layers.regularizers.l2(1e-6))(net_states)
-        
+        net_states = layers.Dense(units=self.gridObj.critic_layersUnitNum[0],kernel_regularizer=layers.regularizers.l2(1e-6))(net_states)
+        #print("\nlast net_states ")
         
         # Add hidden layer(s) for action pathway
-        net_actions = layers.Dense(units= 96,kernel_regularizer=layers.regularizers.l2(1e-6))(actions)
-
-
-        net_actions = layers.Dense(units= 96,kernel_regularizer=layers.regularizers.l2(1e-6))(actions)
-        net_actions = layers.Dropout(rate = 0.2)(net_actions)
-        net_actions = layers.BatchNormalization()(net_actions)
-        net_actions = layers.LeakyReLU(1e-2)(net_actions)
-
-        net_actions = layers.Dense(units= 96,kernel_regularizer=layers.regularizers.l2(1e-6))(actions)
-        net_actions = layers.Dropout(rate = 0.2)(net_actions)
-        net_actions = layers.BatchNormalization()(net_actions)
-        net_actions = layers.LeakyReLU(1e-2)(net_actions)
-
-
+        net_actions = layers.Dense(units=self.gridObj.critic_layersUnitNum[0],kernel_regularizer=layers.regularizers.l2(1e-6))(actions)
+        #print("\n 1st net_actions ")
+        for n in range(self.gridObj.critic_numLayers):
+            if n>0:  #skip first one
+                if self.gridObj.criticActionNNMask[n]:
+                ###### Try different layer sizes, activations, add batch normalization, regularizers, etc.
+                    #print("\n net_actions ")
+                    #rand_units = np.random.choice(self.gridObj.critic_layersUnitNum)
+                    net_actions = layers.Dense(units= self.gridObj.critic_layersUnitNum[n])(net_actions)
+                    net_actions = layers.Dropout(rate = self.gridObj.critic_dropout_rate[n])(net_actions)
+                    net_actions = layers.BatchNormalization()(net_actions)
+                    net_actions = layers.LeakyReLU(1e-2)(net_actions)
         #add last layer with same size as state
-        net_actions = layers.Dense(units=96,kernel_regularizer=layers.regularizers.l2(1e-6))(net_actions)
-       
+        net_actions = layers.Dense(units=self.gridObj.critic_layersUnitNum[0],kernel_regularizer=layers.regularizers.l2(1e-6))(net_actions)
+        #print("\n last net_actions ")
 
        
         
@@ -196,7 +205,7 @@ class Critic:
         self.model = models.Model(inputs=[states, actions], outputs=Q_values)
 
         # Define optimizer and compile model for training with built-in loss function
-        optimizer = optimizers.Adam(lr=0.0001)
+        optimizer = optimizers.Adam(lr=self.gridObj.critic_lr)
         self.model.compile(optimizer=optimizer, loss='mse')
 
         # Compute action gradients (derivative of Q values w.r.t. to actions)
@@ -236,7 +245,7 @@ class OUNoise:
 ########## Agent      
 class DDPG():
     """Reinforcement Learning agent that learns using DDPG."""
-    def __init__(self, task ):
+    def __init__(self, task,gridObj ):
         self.task = task
         self.state_size = task.state_size
         self.action_size = task.action_size
@@ -244,12 +253,12 @@ class DDPG():
         self.action_high = task.action_high
 
         # Actor (Policy) Model
-        self.actor_local = Actor(self.state_size, self.action_size, self.action_low, self.action_high)
-        self.actor_target = Actor(self.state_size, self.action_size, self.action_low, self.action_high)
+        self.actor_local = Actor(self.state_size, self.action_size, self.action_low, self.action_high,gridObj)
+        self.actor_target = Actor(self.state_size, self.action_size, self.action_low, self.action_high,gridObj)
 
         # Critic (Value) Model
-        self.critic_local = Critic(self.state_size, self.action_size)
-        self.critic_target = Critic(self.state_size, self.action_size)
+        self.critic_local = Critic(self.state_size, self.action_size,gridObj)
+        self.critic_target = Critic(self.state_size, self.action_size,gridObj)
 
         # Initialize target model parameters with local model parameters
         self.critic_target.model.set_weights(self.critic_local.model.get_weights())
@@ -332,7 +341,8 @@ class DDPG():
         target_model.set_weights(new_weights)
         
         
-        
+    #sdef __reduce__(self):
+    #    return (self.__class__, (self.name, self.address))   
         
         
         
